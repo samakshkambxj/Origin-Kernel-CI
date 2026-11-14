@@ -1,0 +1,147 @@
+name: Build Origin Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: Branch or tag of Origin-Kernel to build instead of the defaults (main / vanilla)
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KERNEL_REPO: samakshkambxj/Origin-Kernel
+  NEUTRON_TAG: '06092026'
+  NEUTRON_URL: https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download
+
+jobs:
+  build:
+    name: Origin-${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: Reforged
+            default_ref: main
+          - variant: Vanilla
+            default_ref: vanilla
+    env:
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.KERNEL_REPO }}
+          ref: ${{ inputs.kernel_ref || matrix.default_ref }}
+          path: kernel
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+
+      - name: Add swap for the full LTO link
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile >/dev/null
+          sudo swapon /swapfile
+          free -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libssl-dev libelf-dev dwarves zstd lz4 cpio rsync kmod
+
+      - name: Restore Neutron Clang
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/toolchain
+          key: neutron-clang-${{ env.NEUTRON_TAG }}
+
+      - name: Fetch Neutron Clang
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/toolchain"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/neutron.tar.zst" \
+            "$NEUTRON_URL/$NEUTRON_TAG/neutron-clang-$NEUTRON_TAG.tar.zst"
+          tar --zstd -xf "$RUNNER_TEMP/neutron.tar.zst" -C "$RUNNER_TEMP/toolchain"
+          rm -f "$RUNNER_TEMP/neutron.tar.zst"
+
+      - name: Select toolchain
+        run: |
+          echo "$RUNNER_TEMP/toolchain/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/toolchain/bin/clang" --version
+
+      - name: Generate gki_defconfig
+        working-directory: kernel
+        run: make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
+
+      - name: Verify config
+        working-directory: kernel
+        run: |
+          set -e
+          grep -q '^CONFIG_LTO_CLANG_FULL=y$' out/.config
+          grep -q "^CONFIG_LOCALVERSION=\"-Origin-$VARIANT\"$" out/.config
+          grep -E '^CONFIG_(LOCALVERSION|LTO_CLANG_FULL|KSU|KSU_SUSFS|KPM|BBG)=' out/.config
+
+      - name: Build Image
+        working-directory: kernel
+        run: |
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 -j"$(nproc)" \
+            HOSTCFLAGS=-Wno-incompatible-pointer-types-discards-qualifiers \
+            Image
+
+      - name: Package
+        id: package
+        run: |
+          release="$(cat kernel/out/include/config/kernel.release)"
+          mkdir -p dist
+          cp kernel/out/arch/arm64/boot/Image "dist/Image-$release"
+          (cd dist && sha256sum "Image-$release" > "Image-$release.sha256")
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          ls -l dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Origin-${{ matrix.variant }}-${{ steps.package.outputs.release }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download images
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --title "$GITHUB_REF_NAME"
