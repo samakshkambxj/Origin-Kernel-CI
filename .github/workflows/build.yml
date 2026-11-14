@@ -57,10 +57,11 @@ jobs:
 
       - name: Add swap for the full LTO link
         run: |
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile >/dev/null
-          sudo swapon /swapfile
+          swapfile="$RUNNER_TEMP/origin-kernel.swap"
+          sudo fallocate -l 8G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile" >/dev/null
+          sudo swapon "$swapfile"
           free -h
 
       - name: Install build dependencies
