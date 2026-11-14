@@ -3,10 +3,15 @@ name: Build Origin Kernel
 on:
   workflow_dispatch:
     inputs:
-      kernel_ref:
-        description: Branch or tag of Origin-Kernel to build instead of the defaults (main / vanilla)
-        required: false
-        default: ''
+      variant:
+        description: Which variant to build
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - Reforged
+          - Vanilla
   push:
     tags:
       - 'v*'
@@ -31,11 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: Reforged
-            default_ref: main
-          - variant: Vanilla
-            default_ref: vanilla
+        include: ${{ fromJSON(inputs.variant == 'Reforged' && '[{"variant":"Reforged","default_ref":"main"}]' || inputs.variant == 'Vanilla' && '[{"variant":"Vanilla","default_ref":"vanilla"}]' || '[{"variant":"Reforged","default_ref":"main"},{"variant":"Vanilla","default_ref":"vanilla"}]') }}
     env:
       VARIANT: ${{ matrix.variant }}
     steps:
@@ -43,7 +44,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.KERNEL_REPO }}
-          ref: ${{ inputs.kernel_ref || matrix.default_ref }}
+          ref: ${{ matrix.default_ref }}
           path: kernel
           fetch-depth: 1
           submodules: recursive
