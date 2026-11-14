@@ -123,9 +123,9 @@ jobs:
             -e "s|^origin_variant=.*|origin_variant=\"$VARIANT\"|" \
             -e "s|^origin_build=.*|origin_build=\"$release\"|" \
             anykernel/anykernel.sh
-          (cd anykernel && zip -rq9 "../dist/$release-AK3.zip" .)
+          (cd anykernel && zip -rq9 "../dist/$release-AnyKernel3.zip" .)
 
-          (cd dist && sha256sum "Image-$release" "$release-AK3.zip" > SHA256SUMS)
+          (cd dist && sha256sum "Image-$release" "$release-AnyKernel3.zip" > SHA256SUMS)
 
           echo "release=$release" >> "$GITHUB_OUTPUT"
           ls -l dist
