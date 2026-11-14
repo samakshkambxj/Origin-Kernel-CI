@@ -67,7 +67,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex libssl-dev libelf-dev dwarves zstd lz4 cpio rsync kmod
+            bc bison flex libssl-dev libelf-dev dwarves zstd lz4 cpio rsync kmod zip
 
       - name: Restore Neutron Clang
         id: toolchain
@@ -112,10 +112,21 @@ jobs:
       - name: Package
         id: package
         run: |
+          set -e
           release="$(cat kernel/out/include/config/kernel.release)"
           mkdir -p dist
+
           cp kernel/out/arch/arm64/boot/Image "dist/Image-$release"
-          (cd dist && sha256sum "Image-$release" > "Image-$release.sha256")
+
+          cp kernel/out/arch/arm64/boot/Image anykernel/Image
+          sed -i \
+            -e "s|^origin_variant=.*|origin_variant=\"$VARIANT\"|" \
+            -e "s|^origin_build=.*|origin_build=\"$release\"|" \
+            anykernel/anykernel.sh
+          (cd anykernel && zip -rq9 "../dist/$release-AK3.zip" .)
+
+          (cd dist && sha256sum "Image-$release" "$release-AK3.zip" > SHA256SUMS)
+
           echo "release=$release" >> "$GITHUB_OUTPUT"
           ls -l dist
 
